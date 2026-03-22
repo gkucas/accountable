@@ -1,9 +1,12 @@
 use core::result::Result;
 
+use log::error;
+
+use crate::model::TransactionError;
 use crate::model::account::Account;
 use crate::model::account::{Available, Held};
+use crate::model::transaction::OperationKind;
 use crate::model::transaction::{Operation, Transaction, TransactionAction};
-use crate::model::TransactionError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClientId(pub u16);
@@ -45,6 +48,15 @@ impl Client {
                     .ok_or(TransactionError::TransactionNotFound(
                         transaction_reference.transaction_id,
                     ))?;
+                if matches!(applied.operation.kind, OperationKind::Debit) {
+                    error!(
+                        "Cannot dispute withdrawal transaction {}. Not allowed.",
+                        transaction_reference.transaction_id.0
+                    );
+                    return Err(TransactionError::TransactionNotFound(
+                        transaction_reference.transaction_id,
+                    ));
+                }
                 let deposit = Transaction {
                     client_id: applied.client_id,
                     transaction_id: applied.transaction_id,
@@ -86,9 +98,7 @@ impl Client {
 mod tests {
     use super::*;
     use crate::model::account;
-    use crate::model::transaction::{
-        OperationKind, TransactionId, TransactionReference,
-    };
+    use crate::model::transaction::{OperationKind, TransactionId, TransactionReference};
     use proptest::prelude::*;
     use rust_decimal::Decimal;
 
@@ -215,7 +225,9 @@ mod tests {
             .expect("deposit should succeed");
 
         client
-            .apply(TransactionAction::Dispute(TransactionReference { transaction_id: tx_id }))
+            .apply(TransactionAction::Dispute(TransactionReference {
+                transaction_id: tx_id,
+            }))
             .expect("dispute should succeed");
 
         assert_eq!(client.available.balance, Decimal::ZERO);
@@ -238,11 +250,15 @@ mod tests {
             }))
             .expect("deposit should succeed");
         client
-            .apply(TransactionAction::Dispute(TransactionReference { transaction_id: tx_id }))
+            .apply(TransactionAction::Dispute(TransactionReference {
+                transaction_id: tx_id,
+            }))
             .expect("dispute should succeed");
 
         client
-            .apply(TransactionAction::Resolve(TransactionReference { transaction_id: tx_id }))
+            .apply(TransactionAction::Resolve(TransactionReference {
+                transaction_id: tx_id,
+            }))
             .expect("resolve should succeed");
 
         assert_eq!(client.available.balance, amount);
@@ -265,16 +281,23 @@ mod tests {
             }))
             .expect("deposit should succeed");
         client
-            .apply(TransactionAction::Dispute(TransactionReference { transaction_id: tx_id }))
+            .apply(TransactionAction::Dispute(TransactionReference {
+                transaction_id: tx_id,
+            }))
             .expect("dispute should succeed");
 
         client
-            .apply(TransactionAction::Chargeback(TransactionReference { transaction_id: tx_id }))
+            .apply(TransactionAction::Chargeback(TransactionReference {
+                transaction_id: tx_id,
+            }))
             .expect("chargeback should succeed");
 
         assert_eq!(client.available.balance, Decimal::ZERO);
         assert_eq!(client.held.balance, Decimal::ZERO);
-        assert_eq!(client.available.balance + client.held.balance, Decimal::ZERO);
+        assert_eq!(
+            client.available.balance + client.held.balance,
+            Decimal::ZERO
+        );
         assert!(client.suspended);
     }
 
