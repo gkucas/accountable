@@ -70,15 +70,19 @@ impl Client {
                 self.available.apply(transaction_data)?;
             }
             Transaction::Dispute(transaction_reference) => {
-                let held_transaction = self
+                let applied = self
                     .available
                     .transactions
                     .get(&transaction_reference.transaction_id)
                     .ok_or(TransactionError::TransactionNotFound(
                         transaction_reference.transaction_id,
-                    ))?
-                    .to_pending();
-                let applied = self.held.apply(held_transaction)?;
+                    ))?;
+                let deposit = TransactionData {
+                    client_id: applied.client_id,
+                    transaction_id: applied.transaction_id,
+                    operation: Operation::credit(applied.operation.amount),
+                };
+                let applied = self.held.apply(deposit)?;
                 self.available.apply(applied.storno())?;
             }
             Transaction::Resolve(transaction_reference) => {
@@ -91,7 +95,7 @@ impl Client {
                     ))?
                     .storno();
                 let applied = self.held.apply(storno)?;
-                self.available.apply(applied.to_pending())?;
+                self.available.apply(applied.storno())?;
             }
             Transaction::Chargeback(transaction_reference) => {
                 let storno = self
