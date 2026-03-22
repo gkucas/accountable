@@ -149,3 +149,18 @@ production would depend on actual workload shape and operational constraints.
 - dispute-like actions for nonexistent clients are rejected
 - client routing is stable because all actions for a client hash to the same
   ledger shard
+
+## LLM Usage Disclosure
+
+I used an LLM as an assistant during development.
+
+I used it for:
+
+- discussing design tradeoffs and how well the implementation matched the
+  specification
+- reviewing and refining the test strategy
+- generating and reorganizing parts of the test suite
+- README presentation
+
+I reviewed the generated suggestions, adapted them to the codebase, and can
+explain the resulting design decisions, tradeoffs, and limitations.
