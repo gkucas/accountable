@@ -15,6 +15,29 @@ pub struct Ledger {
     pub clients: HashMap<ClientId, Client>,
 }
 
+impl Ledger {
+    pub fn accept(&mut self, transaction: Transaction) -> Result<(), TransactionError> {
+        let client = match &transaction {
+            Transaction::Deposit(transaction_data) | Transaction::Withdrawal(transaction_data) => {
+                self.clients
+                    .entry(transaction_data.client_id)
+                    .or_insert(Client::new(transaction_data.client_id))
+            }
+            Transaction::Dispute(transaction_reference)
+            | Transaction::Resolve(transaction_reference)
+            | Transaction::Chargeback(transaction_reference) => {
+                let Some(client) = self.clients.get_mut(&transaction_reference.client_id) else {
+                    return Err(TransactionError::ClientDoesNotExist(
+                        transaction_reference.client_id,
+                    ));
+                };
+                client
+            }
+        };
+        client.apply(transaction)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClientId(pub u16);
 
@@ -90,6 +113,7 @@ impl Client {
 #[derive(Debug)]
 pub enum TransactionError {
     InsufficientFunds(ClientId),
+    ClientDoesNotExist(ClientId),
     TransactionNotFound(TransactionId),
     DuplicateTransaction(TransactionId),
     ClientAccountSuspended(ClientId),
@@ -109,6 +133,9 @@ impl Display for TransactionError {
             }
             TransactionError::ClientAccountSuspended(client_id) => {
                 write!(f, "Client account is suspended: {}", client_id.0)
+            }
+            TransactionError::ClientDoesNotExist(client_id) => {
+                write!(f, "Client does not exist: {}", client_id.0)
             }
         }
     }
