@@ -1,7 +1,7 @@
 use crate::model::transaction::Pending;
 use crate::model::{
     TransactionError,
-    transaction::{Applied, TransactionData, TransactionId},
+    transaction::{Applied, Transaction, TransactionId},
 };
 use core::{
     marker::PhantomData,
@@ -19,7 +19,7 @@ pub struct Held;
 #[derive(Debug)]
 pub struct Account<Type> {
     pub balance: Decimal,
-    pub transactions: HashMap<TransactionId, TransactionData<Applied>>,
+    pub transactions: HashMap<TransactionId, Transaction<Applied>>,
     _status: std::marker::PhantomData<Type>,
 }
 
@@ -36,8 +36,8 @@ impl<Type> Account<Type> {
 impl<Type> Account<Type> {
     pub fn apply(
         &mut self,
-        data: TransactionData<Pending>,
-    ) -> Result<TransactionData<Applied>, TransactionError> {
+        data: Transaction<Pending>,
+    ) -> Result<Transaction<Applied>, TransactionError> {
         let tx_id = data.transaction_id;
         if self.transactions.contains_key(&tx_id) {
             return Err(TransactionError::DuplicateTransaction(tx_id));

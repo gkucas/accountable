@@ -1,8 +1,8 @@
-use crate::model::ClientId;
-use crate::model::transaction::Operation;
 use crate::model::transaction::Transaction;
-use crate::model::transaction::TransactionData;
+use crate::model::transaction::TransactionAction;
 use crate::model::transaction::TransactionReference;
+use crate::model::transaction::TransactionSumission;
+use crate::model::{ClientId, transaction::Operation};
 use anyhow::Result;
 use anyhow::anyhow;
 use csv::StringRecord;
@@ -17,7 +17,7 @@ struct HeaderInfo {
     pos_transaction_id: usize,
     pos_amount: usize,
 }
-pub fn read_transactions(file_name: &str, tx: Sender<Result<Transaction>>) -> Result<()> {
+pub fn read_transactions(file_name: &str, tx: Sender<Result<TransactionSumission>>) -> Result<()> {
     let mut reader = csv::Reader::from_path(file_name)?;
     let headers = reader.headers()?;
     let mut header_info = HeaderInfo {
@@ -78,40 +78,37 @@ pub fn read_transactions(file_name: &str, tx: Sender<Result<Transaction>>) -> Re
     Ok(())
 }
 
-fn parse_row(row: &StringRecord, header_info: &HeaderInfo) -> Result<Transaction> {
+fn parse_row(row: &StringRecord, header_info: &HeaderInfo) -> Result<TransactionSumission> {
     let client_id = ClientId(row[header_info.pos_client_id].trim().parse()?);
     let transaction_id = row[header_info.pos_transaction_id]
         .trim()
         .parse::<u32>()?
         .into();
-    let transaction = match row[header_info.pos_action]
+    let action = match row[header_info.pos_action]
         .trim()
         .parse::<TransactionType>()?
     {
-        TransactionType::Deposit => Transaction::Deposit(TransactionData {
+        TransactionType::Deposit => TransactionAction::Deposit(Transaction {
             client_id,
             transaction_id,
             operation: Operation::credit(Decimal::from_str(row[header_info.pos_amount].trim())?),
         }),
-        TransactionType::Withdrawal => Transaction::Withdrawal(TransactionData {
+        TransactionType::Withdrawal => TransactionAction::Withdrawal(Transaction {
             client_id,
             transaction_id,
             operation: Operation::debit(Decimal::from_str(row[header_info.pos_amount].trim())?),
         }),
-        TransactionType::Dispute => Transaction::Dispute(TransactionReference {
-            client_id,
-            transaction_id,
-        }),
-        TransactionType::Resolve => Transaction::Resolve(TransactionReference {
-            client_id,
-            transaction_id,
-        }),
-        TransactionType::Chargeback => Transaction::Chargeback(TransactionReference {
-            client_id,
-            transaction_id,
-        }),
+        TransactionType::Dispute => {
+            TransactionAction::Dispute(TransactionReference { transaction_id })
+        }
+        TransactionType::Resolve => {
+            TransactionAction::Resolve(TransactionReference { transaction_id })
+        }
+        TransactionType::Chargeback => {
+            TransactionAction::Chargeback(TransactionReference { transaction_id })
+        }
     };
-    Ok(transaction)
+    Ok(TransactionSumission { client_id, action })
 }
 
 #[derive(Debug, EnumString)]
@@ -146,8 +143,9 @@ mod tests {
 
         let transaction = parse_row(&row, &header_info()).expect("deposit should parse");
 
-        match transaction {
-            Transaction::Deposit(data) => {
+        assert_eq!(transaction.client_id.0, 1);
+        match transaction.action {
+            TransactionAction::Deposit(data) => {
                 assert_eq!(data.client_id.0, 1);
                 assert_eq!(data.transaction_id, TransactionId::from(2));
                 assert!(matches!(data.operation.kind, OperationKind::Credit));
@@ -163,8 +161,9 @@ mod tests {
 
         let transaction = parse_row(&row, &header_info()).expect("withdrawal should parse");
 
-        match transaction {
-            Transaction::Withdrawal(data) => {
+        assert_eq!(transaction.client_id.0, 7);
+        match transaction.action {
+            TransactionAction::Withdrawal(data) => {
                 assert_eq!(data.client_id.0, 7);
                 assert_eq!(data.transaction_id, TransactionId::from(9));
                 assert!(matches!(data.operation.kind, OperationKind::Debit));
@@ -180,9 +179,9 @@ mod tests {
 
         let transaction = parse_row(&row, &header_info()).expect("dispute should parse");
 
-        match transaction {
-            Transaction::Dispute(reference) => {
-                assert_eq!(reference.client_id.0, 1);
+        assert_eq!(transaction.client_id.0, 1);
+        match transaction.action {
+            TransactionAction::Dispute(reference) => {
                 assert_eq!(reference.transaction_id, TransactionId::from(3));
             }
             other => panic!("expected dispute, got {:?}", other),
@@ -195,9 +194,9 @@ mod tests {
 
         let transaction = parse_row(&row, &header_info()).expect("resolve should parse");
 
-        match transaction {
-            Transaction::Resolve(reference) => {
-                assert_eq!(reference.client_id.0, 1);
+        assert_eq!(transaction.client_id.0, 1);
+        match transaction.action {
+            TransactionAction::Resolve(reference) => {
                 assert_eq!(reference.transaction_id, TransactionId::from(3));
             }
             other => panic!("expected resolve, got {:?}", other),
@@ -210,9 +209,9 @@ mod tests {
 
         let transaction = parse_row(&row, &header_info()).expect("chargeback should parse");
 
-        match transaction {
-            Transaction::Chargeback(reference) => {
-                assert_eq!(reference.client_id.0, 1);
+        assert_eq!(transaction.client_id.0, 1);
+        match transaction.action {
+            TransactionAction::Chargeback(reference) => {
                 assert_eq!(reference.transaction_id, TransactionId::from(3));
             }
             other => panic!("expected chargeback, got {:?}", other),
@@ -223,7 +222,8 @@ mod tests {
     fn rejects_deposit_with_missing_amount() {
         let row = StringRecord::from(vec!["deposit", "1", "1", ""]);
 
-        let error = parse_row(&row, &header_info()).expect_err("deposit without amount should fail");
+        let error =
+            parse_row(&row, &header_info()).expect_err("deposit without amount should fail");
 
         assert!(error.to_string().contains("Invalid decimal"));
     }
@@ -232,7 +232,8 @@ mod tests {
     fn rejects_unknown_transaction_type() {
         let row = StringRecord::from(vec!["refund", "1", "1", "1.0"]);
 
-        let error = parse_row(&row, &header_info()).expect_err("unknown transaction type should fail");
+        let error =
+            parse_row(&row, &header_info()).expect_err("unknown transaction type should fail");
 
         assert!(
             !error.to_string().is_empty(),

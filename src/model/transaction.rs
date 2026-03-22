@@ -27,7 +27,7 @@ impl From<u32> for TransactionId {
 }
 
 #[derive(Debug, Clone)]
-pub struct TransactionData<Status> {
+pub struct Transaction<Status> {
     pub client_id: ClientId,
     pub transaction_id: TransactionId,
     pub operation: Operation<Status>,
@@ -76,11 +76,11 @@ pub struct Applied {}
 #[derive(Debug, Clone)]
 pub struct Pending {}
 
-impl TransactionData<Pending> {
+impl Transaction<Pending> {
     pub fn apply<T>(
         self,
         account: &mut Account<T>,
-    ) -> Result<TransactionData<Applied>, TransactionError> {
+    ) -> Result<Transaction<Applied>, TransactionError> {
         let amount = self.operation.amount;
         let operation = match self.operation.kind {
             OperationKind::Debit => {
@@ -95,7 +95,7 @@ impl TransactionData<Pending> {
                 Operation::credit(amount)
             }
         };
-        Ok(TransactionData {
+        Ok(Transaction {
             client_id: self.client_id,
             transaction_id: self.transaction_id,
             operation,
@@ -103,9 +103,9 @@ impl TransactionData<Pending> {
     }
 }
 
-impl TransactionData<Applied> {
-    pub fn storno(&self) -> TransactionData<Pending> {
-        TransactionData {
+impl Transaction<Applied> {
+    pub fn storno(&self) -> Transaction<Pending> {
+        Transaction {
             client_id: self.client_id,
             transaction_id: self.transaction_id.child(),
             operation: self.operation.storno(),
@@ -115,14 +115,19 @@ impl TransactionData<Applied> {
 
 #[derive(Debug)]
 pub struct TransactionReference {
-    pub client_id: ClientId,
     pub transaction_id: TransactionId,
 }
 
 #[derive(Debug)]
-pub enum Transaction {
-    Deposit(TransactionData<Pending>),
-    Withdrawal(TransactionData<Pending>),
+pub struct TransactionSumission {
+    pub client_id: ClientId,
+    pub action: TransactionAction,
+}
+
+#[derive(Debug)]
+pub enum TransactionAction {
+    Deposit(Transaction<Pending>),
+    Withdrawal(Transaction<Pending>),
     Dispute(TransactionReference),
     Resolve(TransactionReference),
     Chargeback(TransactionReference),
@@ -155,7 +160,7 @@ mod tests {
 
     #[test]
     fn transaction_data_storno_preserves_client_and_amount_and_creates_child_tx_id() {
-        let original = TransactionData::<Applied> {
+        let original = Transaction::<Applied> {
             client_id: ClientId(7),
             transaction_id: TransactionId::from(42),
             operation: Operation::credit(Decimal::new(15, 1)),

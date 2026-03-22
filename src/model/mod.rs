@@ -9,34 +9,31 @@ use std::collections::HashMap;
 
 use account::Account;
 use account::{Available, Held};
-use transaction::{Transaction, TransactionId};
+use transaction::{TransactionAction, TransactionId};
 
-use crate::model::transaction::{Operation, TransactionData};
+use crate::model::transaction::{Operation, Transaction, TransactionSumission};
 
 pub struct Ledger {
     pub clients: HashMap<ClientId, Client>,
 }
 
 impl Ledger {
-    pub fn accept(&mut self, transaction: Transaction) -> Result<(), TransactionError> {
-        let client = match &transaction {
-            Transaction::Deposit(transaction_data) | Transaction::Withdrawal(transaction_data) => {
-                self.clients
-                    .entry(transaction_data.client_id)
-                    .or_insert(Client::new(transaction_data.client_id))
-            }
-            Transaction::Dispute(transaction_reference)
-            | Transaction::Resolve(transaction_reference)
-            | Transaction::Chargeback(transaction_reference) => {
-                let Some(client) = self.clients.get_mut(&transaction_reference.client_id) else {
-                    return Err(TransactionError::ClientDoesNotExist(
-                        transaction_reference.client_id,
-                    ));
+    pub fn accept(&mut self, transaction: TransactionSumission) -> Result<(), TransactionError> {
+        let client = match &transaction.action {
+            TransactionAction::Deposit(_) | TransactionAction::Withdrawal(_) => self
+                .clients
+                .entry(transaction.client_id)
+                .or_insert(Client::new(transaction.client_id)),
+            TransactionAction::Dispute(_)
+            | TransactionAction::Resolve(_)
+            | TransactionAction::Chargeback(_) => {
+                let Some(client) = self.clients.get_mut(&transaction.client_id) else {
+                    return Err(TransactionError::ClientDoesNotExist(transaction.client_id));
                 };
                 client
             }
         };
-        client.apply(transaction)
+        client.apply(transaction.action)
     }
 }
 
@@ -60,18 +57,18 @@ impl Client {
             suspended: false,
         }
     }
-    pub fn apply(&mut self, transaction: Transaction) -> Result<(), TransactionError> {
+    pub fn apply(&mut self, transaction: TransactionAction) -> Result<(), TransactionError> {
         if self.suspended {
             return Err(TransactionError::ClientAccountSuspended(self.client_id));
         }
         match transaction {
-            Transaction::Deposit(transaction_data) => {
+            TransactionAction::Deposit(transaction_data) => {
                 self.available.apply(transaction_data)?;
             }
-            Transaction::Withdrawal(transaction_data) => {
+            TransactionAction::Withdrawal(transaction_data) => {
                 self.available.apply(transaction_data)?;
             }
-            Transaction::Dispute(transaction_reference) => {
+            TransactionAction::Dispute(transaction_reference) => {
                 let applied = self
                     .available
                     .transactions
@@ -79,7 +76,7 @@ impl Client {
                     .ok_or(TransactionError::TransactionNotFound(
                         transaction_reference.transaction_id,
                     ))?;
-                let deposit = TransactionData {
+                let deposit = Transaction {
                     client_id: applied.client_id,
                     transaction_id: applied.transaction_id,
                     operation: Operation::credit(applied.operation.amount),
@@ -87,7 +84,7 @@ impl Client {
                 let applied = self.held.apply(deposit)?;
                 self.available.apply(applied.storno())?;
             }
-            Transaction::Resolve(transaction_reference) => {
+            TransactionAction::Resolve(transaction_reference) => {
                 let storno = self
                     .held
                     .transactions
@@ -99,7 +96,7 @@ impl Client {
                 let applied = self.held.apply(storno)?;
                 self.available.apply(applied.storno())?;
             }
-            Transaction::Chargeback(transaction_reference) => {
+            TransactionAction::Chargeback(transaction_reference) => {
                 let storno = self
                     .held
                     .transactions
@@ -151,7 +148,8 @@ impl Display for TransactionError {
 mod tests {
     use super::*;
     use crate::model::transaction::{
-        Operation, OperationKind, Transaction, TransactionData, TransactionId, TransactionReference,
+        Operation, OperationKind, Transaction, TransactionAction, TransactionId,
+        TransactionReference, TransactionSumission,
     };
     use proptest::prelude::*;
     use rust_decimal::Decimal;
@@ -232,31 +230,34 @@ mod tests {
         client_id: ClientId,
         tx_seed: u16,
         spec: OperationSpec,
-    ) -> Transaction {
+    ) -> TransactionAction {
         match spec {
-            OperationSpec::Deposit { amount } => Transaction::Deposit(TransactionData {
+            OperationSpec::Deposit { amount } => TransactionAction::Deposit(Transaction {
                 client_id,
                 transaction_id: TransactionId::from(u32::from(tx_seed)),
                 operation: Operation::credit(into_decimal(amount)),
             }),
-            OperationSpec::Withdrawal { amount } => Transaction::Withdrawal(TransactionData {
+            OperationSpec::Withdrawal { amount } => TransactionAction::Withdrawal(Transaction {
                 client_id,
                 transaction_id: TransactionId::from(u32::from(tx_seed)),
                 operation: Operation::debit(into_decimal(amount)),
             }),
-            OperationSpec::Dispute { tx } => Transaction::Dispute(TransactionReference {
-                client_id,
+            OperationSpec::Dispute { tx } => TransactionAction::Dispute(TransactionReference {
                 transaction_id: TransactionId::from(u32::from(tx)),
             }),
-            OperationSpec::Resolve { tx } => Transaction::Resolve(TransactionReference {
-                client_id,
+            OperationSpec::Resolve { tx } => TransactionAction::Resolve(TransactionReference {
                 transaction_id: TransactionId::from(u32::from(tx)),
             }),
-            OperationSpec::Chargeback { tx } => Transaction::Chargeback(TransactionReference {
-                client_id,
-                transaction_id: TransactionId::from(u32::from(tx)),
-            }),
+            OperationSpec::Chargeback { tx } => {
+                TransactionAction::Chargeback(TransactionReference {
+                    transaction_id: TransactionId::from(u32::from(tx)),
+                })
+            }
         }
+    }
+
+    fn submission(client_id: ClientId, action: TransactionAction) -> TransactionSumission {
+        TransactionSumission { client_id, action }
     }
 
     fn existing_tx_id(created_tx_ids: &[TransactionId], selector: u16) -> TransactionId {
@@ -271,11 +272,11 @@ mod tests {
             clients: HashMap::new(),
         };
 
-        let result = ledger.accept(Transaction::Deposit(TransactionData {
+        let result = ledger.accept(submission(client_id, TransactionAction::Deposit(Transaction {
             client_id,
             transaction_id: TransactionId::from(1),
             operation: Operation::credit(Decimal::new(10_000, 4)),
-        }));
+        })));
 
         assert!(result.is_ok());
         assert!(ledger.clients.contains_key(&client_id));
@@ -288,11 +289,11 @@ mod tests {
             clients: HashMap::new(),
         };
 
-        let result = ledger.accept(Transaction::Withdrawal(TransactionData {
+        let result = ledger.accept(submission(client_id, TransactionAction::Withdrawal(Transaction {
             client_id,
             transaction_id: TransactionId::from(2),
             operation: Operation::debit(Decimal::new(10_000, 4)),
-        }));
+        })));
 
         assert!(ledger.clients.contains_key(&client_id));
         assert!(matches!(result, Err(TransactionError::InsufficientFunds(id)) if id == client_id));
@@ -305,10 +306,9 @@ mod tests {
             clients: HashMap::new(),
         };
 
-        let result = ledger.accept(Transaction::Dispute(TransactionReference {
-            client_id,
+        let result = ledger.accept(submission(client_id, TransactionAction::Dispute(TransactionReference {
             transaction_id: TransactionId::from(3),
-        }));
+        })));
 
         assert!(matches!(result, Err(TransactionError::ClientDoesNotExist(id)) if id == client_id));
         assert!(!ledger.clients.contains_key(&client_id));
@@ -322,7 +322,7 @@ mod tests {
         let mut client = Client::new(client_id);
 
         client
-            .apply(Transaction::Deposit(TransactionData {
+            .apply(TransactionAction::Deposit(Transaction {
                 client_id,
                 transaction_id: tx_id,
                 operation: Operation::credit(amount),
@@ -330,8 +330,7 @@ mod tests {
             .expect("deposit should succeed");
 
         client
-            .apply(Transaction::Dispute(TransactionReference {
-                client_id,
+            .apply(TransactionAction::Dispute(TransactionReference {
                 transaction_id: tx_id,
             }))
             .expect("dispute should succeed");
@@ -349,22 +348,20 @@ mod tests {
         let mut client = Client::new(client_id);
 
         client
-            .apply(Transaction::Deposit(TransactionData {
+            .apply(TransactionAction::Deposit(Transaction {
                 client_id,
                 transaction_id: tx_id,
                 operation: Operation::credit(amount),
             }))
             .expect("deposit should succeed");
         client
-            .apply(Transaction::Dispute(TransactionReference {
-                client_id,
+            .apply(TransactionAction::Dispute(TransactionReference {
                 transaction_id: tx_id,
             }))
             .expect("dispute should succeed");
 
         client
-            .apply(Transaction::Resolve(TransactionReference {
-                client_id,
+            .apply(TransactionAction::Resolve(TransactionReference {
                 transaction_id: tx_id,
             }))
             .expect("resolve should succeed");
@@ -382,22 +379,20 @@ mod tests {
         let mut client = Client::new(client_id);
 
         client
-            .apply(Transaction::Deposit(TransactionData {
+            .apply(TransactionAction::Deposit(Transaction {
                 client_id,
                 transaction_id: tx_id,
                 operation: Operation::credit(amount),
             }))
             .expect("deposit should succeed");
         client
-            .apply(Transaction::Dispute(TransactionReference {
-                client_id,
+            .apply(TransactionAction::Dispute(TransactionReference {
                 transaction_id: tx_id,
             }))
             .expect("dispute should succeed");
 
         client
-            .apply(Transaction::Chargeback(TransactionReference {
-                client_id,
+            .apply(TransactionAction::Chargeback(TransactionReference {
                 transaction_id: tx_id,
             }))
             .expect("chargeback should succeed");
@@ -438,7 +433,7 @@ mod tests {
                 let transaction = match step {
                     LifecycleStep::CreateDeposit { amount } => {
                         created_tx_ids.push(next_tx_id);
-                        Transaction::Deposit(TransactionData {
+                        TransactionAction::Deposit(Transaction {
                             client_id,
                             transaction_id: next_tx_id,
                             operation: Operation::credit(into_decimal(amount)),
@@ -446,7 +441,7 @@ mod tests {
                     }
                     LifecycleStep::CreateWithdrawal { amount } => {
                         created_tx_ids.push(next_tx_id);
-                        Transaction::Withdrawal(TransactionData {
+                        TransactionAction::Withdrawal(Transaction {
                             client_id,
                             transaction_id: next_tx_id,
                             operation: Operation::debit(into_decimal(amount)),
@@ -457,8 +452,7 @@ mod tests {
                             assert_balance_invariant(&client)?;
                             continue;
                         };
-                        Transaction::Dispute(TransactionReference {
-                            client_id,
+                        TransactionAction::Dispute(TransactionReference {
                             transaction_id: existing_tx_id(&created_tx_ids, selector),
                         })
                     }
@@ -467,8 +461,7 @@ mod tests {
                             assert_balance_invariant(&client)?;
                             continue;
                         };
-                        Transaction::Resolve(TransactionReference {
-                            client_id,
+                        TransactionAction::Resolve(TransactionReference {
                             transaction_id: existing_tx_id(&created_tx_ids, selector),
                         })
                     }
@@ -477,8 +470,7 @@ mod tests {
                             assert_balance_invariant(&client)?;
                             continue;
                         };
-                        Transaction::Chargeback(TransactionReference {
-                            client_id,
+                        TransactionAction::Chargeback(TransactionReference {
                             transaction_id: existing_tx_id(&created_tx_ids, selector),
                         })
                     }
