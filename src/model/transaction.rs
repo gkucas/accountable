@@ -1,6 +1,5 @@
 use core::{
     convert::From,
-    marker::PhantomData,
     result::Result::{self, Ok},
 };
 use rust_decimal::Decimal;
@@ -65,13 +64,6 @@ impl<Status> Operation<Status> {
 }
 
 impl Operation<Applied> {
-    pub fn to_pending(&self) -> Operation<Pending> {
-        Operation {
-            kind: self.kind.clone(),
-            amount: self.amount,
-            _status: PhantomData,
-        }
-    }
     pub fn storno(&self) -> Operation<Pending> {
         match self.kind {
             OperationKind::Debit => Operation::credit(self.amount),
@@ -112,13 +104,6 @@ impl TransactionData<Pending> {
 }
 
 impl TransactionData<Applied> {
-    pub fn to_pending(&self) -> TransactionData<Pending> {
-        TransactionData {
-            client_id: self.client_id,
-            transaction_id: self.transaction_id,
-            operation: self.operation.to_pending(),
-        }
-    }
     pub fn storno(&self) -> TransactionData<Pending> {
         TransactionData {
             client_id: self.client_id,
@@ -141,4 +126,70 @@ pub enum Transaction {
     Dispute(TransactionReference),
     Resolve(TransactionReference),
     Chargeback(TransactionReference),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn storno_reverses_credit_operation_into_debit() {
+        let operation = Operation::<Applied>::credit(Decimal::new(12_500, 4));
+
+        let storno = operation.storno();
+
+        assert!(matches!(storno.kind, OperationKind::Debit));
+        assert_eq!(storno.amount, Decimal::new(12_500, 4));
+    }
+
+    #[test]
+    fn storno_reverses_debit_operation_into_credit() {
+        let operation = Operation::<Applied>::debit(Decimal::new(40_001, 4));
+
+        let storno = operation.storno();
+
+        assert!(matches!(storno.kind, OperationKind::Credit));
+        assert_eq!(storno.amount, Decimal::new(40_001, 4));
+    }
+
+    #[test]
+    fn transaction_data_storno_preserves_client_and_amount_and_creates_child_tx_id() {
+        let original = TransactionData::<Applied> {
+            client_id: ClientId(7),
+            transaction_id: TransactionId::from(42),
+            operation: Operation::credit(Decimal::new(15, 1)),
+        };
+
+        let storno = original.storno();
+
+        assert_eq!(storno.client_id, original.client_id);
+        assert_ne!(storno.transaction_id, original.transaction_id);
+        assert_eq!(storno.transaction_id, original.transaction_id.child());
+        assert!(matches!(storno.operation.kind, OperationKind::Debit));
+        assert_eq!(storno.operation.amount, original.operation.amount);
+    }
+
+    #[test]
+    fn child_transaction_id_is_deterministic_for_the_same_parent() {
+        let parent = TransactionId::from(42);
+
+        let first_child = parent.child();
+        let second_child = parent.child();
+
+        assert_eq!(first_child, second_child);
+        assert_ne!(first_child, parent);
+    }
+
+    #[test]
+    fn different_parents_produce_different_child_transaction_ids() {
+        let first_parent = TransactionId::from(41);
+        let second_parent = TransactionId::from(42);
+
+        let first_child = first_parent.child();
+        let second_child = second_parent.child();
+
+        assert_ne!(first_parent, second_parent);
+        assert_ne!(first_child, second_child);
+    }
 }

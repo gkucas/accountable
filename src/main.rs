@@ -4,7 +4,6 @@ use std::{collections::HashMap, env};
 use anyhow::Error;
 use log::error;
 
-use crate::model::Client;
 use crate::model::Ledger;
 
 mod model;
