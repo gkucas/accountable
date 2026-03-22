@@ -119,7 +119,7 @@ pub struct TransactionReference {
 }
 
 #[derive(Debug)]
-pub struct TransactionSumission {
+pub struct TransactionSubmission {
     pub client_id: ClientId,
     pub action: TransactionAction,
 }

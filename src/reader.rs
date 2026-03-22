@@ -1,7 +1,7 @@
 use crate::model::transaction::Transaction;
 use crate::model::transaction::TransactionAction;
 use crate::model::transaction::TransactionReference;
-use crate::model::transaction::TransactionSumission;
+use crate::model::transaction::TransactionSubmission;
 use crate::model::{ClientId, transaction::Operation};
 use anyhow::Result;
 use anyhow::anyhow;
@@ -17,7 +17,7 @@ struct HeaderInfo {
     pos_transaction_id: usize,
     pos_amount: usize,
 }
-pub fn read_transactions(file_name: &str, tx: Sender<Result<TransactionSumission>>) -> Result<()> {
+pub fn read_transactions(file_name: &str, tx: Sender<Result<TransactionSubmission>>) -> Result<()> {
     let mut reader = csv::Reader::from_path(file_name)?;
     let headers = reader.headers()?;
     let mut header_info = HeaderInfo {
@@ -78,7 +78,7 @@ pub fn read_transactions(file_name: &str, tx: Sender<Result<TransactionSumission
     Ok(())
 }
 
-fn parse_row(row: &StringRecord, header_info: &HeaderInfo) -> Result<TransactionSumission> {
+fn parse_row(row: &StringRecord, header_info: &HeaderInfo) -> Result<TransactionSubmission> {
     let client_id = ClientId(row[header_info.pos_client_id].trim().parse()?);
     let transaction_id = row[header_info.pos_transaction_id]
         .trim()
@@ -108,7 +108,7 @@ fn parse_row(row: &StringRecord, header_info: &HeaderInfo) -> Result<Transaction
             TransactionAction::Chargeback(TransactionReference { transaction_id })
         }
     };
-    Ok(TransactionSumission { client_id, action })
+    Ok(TransactionSubmission { client_id, action })
 }
 
 #[derive(Debug, EnumString)]
